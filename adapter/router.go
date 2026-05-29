@@ -28,6 +28,7 @@ type Router interface {
 	NeighborResolver() NeighborResolver
 	AppendTracker(tracker ConnectionTracker)
 	ResetNetwork()
+	GetCtx() context.Context
 }
 
 type PreMatchAction uint8

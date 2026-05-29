@@ -14,6 +14,7 @@ import (
 	"github.com/sagernet/sing-box/common/sniff"
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
 	R "github.com/sagernet/sing-box/route/rule"
 	"github.com/sagernet/sing-mux"
 	"github.com/sagernet/sing-tun"
@@ -627,6 +628,35 @@ func (r *Router) matchRule(
 	fatalErr = r.prepareMatchMetadata(ctx, metadata)
 	if fatalErr != nil {
 		return
+	}
+	if metadata.InboundOptions != (option.InboundOptions{}) {
+		if metadata.InboundOptions.SniffEnabled {
+			newBuffer, newPacketBuffers, newErr := r.actionSniff(ctx, metadata, &R.RuleActionSniff{
+				OverrideDestination: metadata.InboundOptions.SniffOverrideDestination,
+				Timeout:             time.Duration(metadata.InboundOptions.SniffTimeout),
+			}, inputConn, inputPacketConn, buffers, packetBuffers)
+			if newBuffer != nil {
+				buffers = append(buffers, newBuffer)
+			} else if len(newPacketBuffers) > 0 {
+				packetBuffers = append(packetBuffers, newPacketBuffers...)
+			}
+			if newErr != nil {
+				fatalErr = newErr
+				return
+			}
+		}
+		if C.DomainStrategy(metadata.InboundOptions.DomainStrategy) != C.DomainStrategyAsIS {
+			fatalErr = r.actionResolve(ctx, metadata, &R.RuleActionResolve{
+				Strategy: C.DomainStrategy(metadata.InboundOptions.DomainStrategy),
+			})
+			if fatalErr != nil {
+				return
+			}
+		}
+		if metadata.InboundOptions.UDPDisableDomainUnmapping {
+			metadata.UDPDisableDomainUnmapping = true
+		}
+		metadata.InboundOptions = option.InboundOptions{}
 	}
 
 match:
