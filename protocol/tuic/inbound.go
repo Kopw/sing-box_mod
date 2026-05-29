@@ -3,6 +3,7 @@ package tuic
 import (
 	"context"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/sagernet/sing-box/adapter"
@@ -35,6 +36,9 @@ type Inbound struct {
 	tlsConfig    tls.ServerConfig
 	server       *tuic.Service[int]
 	userNameList []string
+	uidToUuid    map[int]string
+	uuidToUid    map[string]int
+	userconns    sync.Map
 }
 
 func NewInbound(ctx context.Context, router adapter.Router, logger log.ContextLogger, tag string, options option.TUICInboundOptions) (adapter.Inbound, error) {
@@ -81,6 +85,8 @@ func NewInbound(ctx context.Context, router adapter.Router, logger log.ContextLo
 	var userNameList []string
 	var userUUIDList [][16]byte
 	var userPasswordList []string
+	uidToUuid := make(map[int]string, len(options.Users))
+	uuidToUid := make(map[string]int, len(options.Users))
 	for index, user := range options.Users {
 		if user.UUID == "" {
 			return nil, E.New("missing uuid for user ", index)
@@ -93,10 +99,18 @@ func NewInbound(ctx context.Context, router adapter.Router, logger log.ContextLo
 		userNameList = append(userNameList, user.Name)
 		userUUIDList = append(userUUIDList, userUUID)
 		userPasswordList = append(userPasswordList, user.Password)
+		userName := user.Name
+		if userName == "" {
+			userName = user.UUID
+		}
+		uidToUuid[index] = userName
+		uuidToUid[userName] = index
 	}
 	service.UpdateUsers(userList, userUUIDList, userPasswordList)
 	inbound.server = service
 	inbound.userNameList = userNameList
+	inbound.uidToUuid = uidToUuid
+	inbound.uuidToUid = uuidToUid
 	return inbound, nil
 }
 
@@ -112,12 +126,21 @@ func (h *Inbound) NewConnectionEx(ctx context.Context, conn net.Conn, source M.S
 	metadata.Source = source
 	metadata.Destination = destination
 	h.logger.InfoContext(ctx, "inbound connection from ", metadata.Source)
-	userID, _ := auth.UserFromContext[int](ctx)
-	if userName := h.userNameList[userID]; userName != "" {
+	userID, loaded := auth.UserFromContext[int](ctx)
+	if !loaded {
+		N.CloseOnHandshakeFailure(conn, onClose, E.New("missing user in TUIC context"))
+		return
+	}
+	if userName, found := h.uidToUuid[userID]; found && userName != "" {
 		metadata.User = userName
+		h.userconns.Store(conn, userName)
+		onClose = N.AppendClose(onClose, func(err error) {
+			h.userconns.Delete(conn)
+		})
 		h.logger.InfoContext(ctx, "[", userName, "] inbound connection to ", metadata.Destination)
 	} else {
-		h.logger.InfoContext(ctx, "inbound connection to ", metadata.Destination)
+		N.CloseOnHandshakeFailure(conn, onClose, E.New("invalid TUIC user: ", userID))
+		return
 	}
 	h.router.RouteConnectionEx(ctx, conn, metadata, onClose)
 }
@@ -134,12 +157,17 @@ func (h *Inbound) NewPacketConnectionEx(ctx context.Context, conn N.PacketConn, 
 	metadata.Source = source
 	metadata.Destination = destination
 	h.logger.InfoContext(ctx, "inbound packet connection from ", metadata.Source)
-	userID, _ := auth.UserFromContext[int](ctx)
-	if userName := h.userNameList[userID]; userName != "" {
+	userID, loaded := auth.UserFromContext[int](ctx)
+	if !loaded {
+		N.CloseOnHandshakeFailure(conn, onClose, E.New("missing user in TUIC context"))
+		return
+	}
+	if userName, found := h.uidToUuid[userID]; found && userName != "" {
 		metadata.User = userName
 		h.logger.InfoContext(ctx, "[", userName, "] inbound packet connection to ", metadata.Destination)
 	} else {
-		h.logger.InfoContext(ctx, "inbound packet connection to ", metadata.Destination)
+		N.CloseOnHandshakeFailure(conn, onClose, E.New("invalid TUIC user: ", userID))
+		return
 	}
 	h.router.RoutePacketConnectionEx(ctx, conn, metadata, onClose)
 }

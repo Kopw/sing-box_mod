@@ -135,6 +135,8 @@ func (h *RelayInbound) newConnection(ctx context.Context, conn net.Conn, metadat
 	//nolint:staticcheck
 	metadata.InboundDetour = h.listener.ListenOptions().Detour
 	//nolint:staticcheck
+	metadata.InboundOptions = h.listener.ListenOptions().InboundOptions
+	//nolint:staticcheck
 	return h.router.RouteConnection(ctx, conn, metadata)
 }
 
@@ -156,6 +158,8 @@ func (h *RelayInbound) newPacketConnection(ctx context.Context, conn N.PacketCon
 	metadata.InboundType = h.Type()
 	//nolint:staticcheck
 	metadata.InboundDetour = h.listener.ListenOptions().Detour
+	//nolint:staticcheck
+	metadata.InboundOptions = h.listener.ListenOptions().InboundOptions
 	//nolint:staticcheck
 	return h.router.RoutePacketConnection(ctx, conn, metadata)
 }
